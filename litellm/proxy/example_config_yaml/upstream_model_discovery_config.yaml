@@ -1,0 +1,26 @@
+# Example: dynamically serve every model exposed by another OpenAI-compatible
+# server (e.g. another litellm proxy) without whitelisting them individually.
+#
+# At proxy startup (and every `refresh_interval` seconds afterwards), litellm
+# will GET `{api_base}/models` on each upstream below and register every model
+# it finds as `{prefix}/{model_id}`. If a new model appears upstream, it
+# becomes available locally on the next refresh — no config changes needed.
+#
+# Static `model_list` entries below still work as usual and take precedence
+# over any discovered model with the same name.
+
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+upstream_model_discovery:
+  - api_base: os.environ/OPENAI_API_BASE
+    api_key: os.environ/OPENAI_API_KEY
+    # Optional. Defaults to a slug derived from api_base (host only),
+    # e.g. https://upstream-litellm.example.com/v1 -> upstream-litellm-example-com
+    # prefix: upstream
+    # Optional. Seconds between refreshes. 0 disables the refresh loop
+    # (initial discovery still runs at startup).
+    refresh_interval: 300

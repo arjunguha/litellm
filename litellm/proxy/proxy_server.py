@@ -4343,6 +4343,27 @@ class ProxyConfig:
                 if "ollama" in litellm_model_name and litellm_model_api_base is None:
                     run_ollama_serve()
 
+        ## UPSTREAM MODEL DISCOVERY (dynamic /v1/models from another server)
+        upstream_discovery_config = config.get("upstream_model_discovery", None)
+        if upstream_discovery_config:
+            from litellm.proxy.upstream_model_discovery import UpstreamModelDiscovery
+
+            upstream_discovery = UpstreamModelDiscovery(
+                upstreams=upstream_discovery_config,
+                static_model_list=model_list or [],
+            )
+            combined_model_list = await upstream_discovery.build_combined_model_list()
+            model_list = combined_model_list
+            router_params["model_list"] = model_list
+            self._upstream_discovery = upstream_discovery
+        else:
+            # Cancel any prior refresh loop if upstream discovery was removed
+            # from the config on reload.
+            prior = getattr(self, "_upstream_discovery", None)
+            if prior is not None and prior._refresh_task is not None:
+                prior._refresh_task.cancel()
+            self._upstream_discovery = None
+
         ## ASSISTANT SETTINGS
         assistants_config: Optional[AssistantsTypedDict] = None
         assistant_settings = config.get("assistant_settings", None)
@@ -4410,6 +4431,9 @@ class ProxyConfig:
 
         if redis_usage_cache is not None and router.cache.redis_cache is None:
             router._update_redis_cache(cache=redis_usage_cache)
+
+        if getattr(self, "_upstream_discovery", None) is not None:
+            self._upstream_discovery.start_refresh_task(router)
 
         # Guardrail settings
         guardrails_v2: Optional[List[Dict]] = None
