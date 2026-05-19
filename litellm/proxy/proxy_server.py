@@ -4768,6 +4768,28 @@ class ProxyConfig:
                     model_id = str(model_id)
                 combined_id_list.append(model_id)  # ADD CONFIG MODEL TO COMBINED LIST
 
+        ## DYNAMICALLY DISCOVERED MODELS ##
+        # These are not present in the static YAML model_list or in the DB.
+        # Preserve them during DB reconciliation; the upstream discovery refresh
+        # loop owns adding/removing them based on the upstream /models response.
+        for model in llm_router.get_model_list() or []:
+            model_info = model.get("model_info") or {}
+            if model_info.get("upstream_discovered") is not True:
+                continue
+
+            model_id = model_info.get("id")
+            if model_id is None:
+                litellm_params = model.get("litellm_params") or {}
+                model_name = model.get("model_name")
+                if model_name is not None and isinstance(litellm_params, dict):
+                    model_id = llm_router._generate_model_id(
+                        model_group=model_name,
+                        litellm_params=litellm_params,
+                    )
+
+            if model_id is not None:
+                combined_id_list.append(str(model_id))
+
         router_model_ids = llm_router.get_model_ids()
         # Check for model IDs in llm_router not present in combined_id_list and delete them
 

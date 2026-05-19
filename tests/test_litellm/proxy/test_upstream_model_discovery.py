@@ -11,6 +11,7 @@ Covers:
 import asyncio
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -319,3 +320,44 @@ class TestUpstreamModelDiscovery:
                 await mgr._refresh_task
             except (asyncio.CancelledError, BaseException):
                 pass
+
+    @pytest.mark.asyncio
+    async def test_db_reconciliation_preserves_upstream_discovered_models(
+        self, monkeypatch
+    ):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        router = MagicMock()
+        router.get_model_ids.return_value = ["db-model-id", "dynamic-model-id"]
+        router.get_model_list.return_value = [
+            {
+                "model_name": "up/gpt-4o",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_base": "https://upstream.example.com/v1",
+                    "api_key": "sk-x",
+                },
+                "model_info": {
+                    "id": "dynamic-model-id",
+                    "upstream_discovered": True,
+                },
+            }
+        ]
+
+        monkeypatch.setattr(proxy_server, "llm_router", router)
+        monkeypatch.setattr(proxy_server, "user_config_file_path", None)
+
+        proxy_config = ProxyConfig()
+        proxy_config.get_config = AsyncMock(return_value={"model_list": []})
+        db_model = SimpleNamespace(
+            model_id="db-model-id",
+            model_name="db-model",
+            model_info={},
+            litellm_params={},
+        )
+
+        deleted = await proxy_config._delete_deployment(db_models=[db_model])
+
+        assert deleted == 0
+        router.delete_deployment.assert_not_called()
