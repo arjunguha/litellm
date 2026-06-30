@@ -16,6 +16,7 @@ router = APIRouter()
 )  # if mounted at root path
 async def get_ui_config():
     from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+    from litellm.proxy.no_db_admin import is_no_db_admin_enabled
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
 
     from litellm.proxy.proxy_server import general_settings
@@ -38,6 +39,9 @@ async def get_ui_config():
         auto_redirect_to_sso=sso_configured and auto_redirect_ui_login_to_sso,
         admin_ui_disabled=admin_ui_disabled,
         sso_configured=sso_configured,
+        database_mode=(
+            "config" if is_no_db_admin_enabled(general_settings) else "database"
+        ),
         is_control_plane=is_control_plane,
         workers=proxy_config.worker_registry if is_control_plane else [],
     )

@@ -32,6 +32,7 @@ interface KeyInfoViewProps {
   onDelete?: () => void;
   teams: any[] | null;
   backButtonText?: string;
+  readOnly?: boolean;
 }
 
 // Must stay in sync with LiteLLM_ManagementEndpoint_MetadataFields_Premium
@@ -63,6 +64,7 @@ export default function KeyInfoView({
   onKeyDataUpdate,
   onDelete,
   backButtonText = "Back to Keys",
+  readOnly = false,
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
@@ -362,21 +364,23 @@ export default function KeyInfoView({
   };
 
   const canModifyKey =
-    isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      )) ||
-    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
+    !readOnly &&
+    (isProxyAdminRole(userRole || "") ||
+      (teamsData &&
+        isUserTeamAdminForSingleTeam(
+          teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
+          userID || "",
+        )) ||
+      (userID === currentKeyData.user_id && userRole !== "Internal Viewer"));
 
   const canResetSpend =
-    isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      ));
+    !readOnly &&
+    (isProxyAdminRole(userRole || "") ||
+      (teamsData &&
+        isUserTeamAdminForSingleTeam(
+          teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
+          userID || "",
+        )));
 
   const handleResetSpend = () => {
     resetKeySpend(currentKeyData.token || currentKeyData.token_id, {
@@ -414,9 +418,11 @@ export default function KeyInfoView({
         onResetSpend={canResetSpend ? () => setIsResetSpendModalOpen(true) : undefined}
         canModifyKey={canModifyKey}
         backButtonText={backButtonText}
-        regenerateDisabled={!premiumUser}
+        regenerateDisabled={readOnly || !premiumUser}
         regenerateTooltip={
-          !premiumUser
+          readOnly
+            ? "Keys are managed in secrets.yaml in config-backed mode."
+            : !premiumUser
             ? "This is a LiteLLM Enterprise feature, and requires a valid key to use."
             : undefined
         }
@@ -647,7 +653,7 @@ export default function KeyInfoView({
 
                   <div>
                     <Text className="font-medium">Secret Key</Text>
-                    <Text className="font-mono">{currentKeyData.key_name}</Text>
+                    <Text className="font-mono">{currentKeyData.key || currentKeyData.key_name}</Text>
                   </div>
 
                   <div>

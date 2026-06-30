@@ -406,6 +406,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.no_db_admin import initialize_no_db_admin_store
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -4080,6 +4081,11 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+        initialize_no_db_admin_store(
+            config=config,
+            config_file_path=config_file_path,
+            general_settings=general_settings,
+        )
         _enable_hc_routing = False
         _hc_staleness = None
         _hc_ignore_transient = False

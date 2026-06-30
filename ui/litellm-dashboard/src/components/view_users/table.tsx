@@ -51,6 +51,7 @@ interface UserDataTableProps {
   userListResponse: any;
   currentPage: number;
   handlePageChange: (newPage: number) => void;
+  readOnly?: boolean;
 }
 
 export function UserDataTable({
@@ -75,6 +76,7 @@ export function UserDataTable({
   userListResponse,
   currentPage,
   handlePageChange,
+  readOnly = false,
 }: UserDataTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([
     {
@@ -143,9 +145,9 @@ export function UserDataTable({
               isIndeterminate,
             }
           : undefined,
-      );
+      ).filter((column) => !readOnly || column.id !== "actions");
     }
-    return originalColumns;
+    return originalColumns.filter((column) => !readOnly || column.id !== "actions");
   }, [
     possibleUIRoles,
     handleEdit,
@@ -157,6 +159,7 @@ export function UserDataTable({
     selectedUsers,
     isAllSelected,
     isIndeterminate,
+    readOnly,
   ]);
 
   const table = useReactTable({
@@ -206,7 +209,8 @@ export function UserDataTable({
         userRole={userRole}
         possibleUIRoles={possibleUIRoles}
         initialTab={openInEditMode ? 1 : 0}
-        startInEditMode={openInEditMode}
+        startInEditMode={!readOnly && openInEditMode}
+        readOnly={readOnly}
       />
     );
   }

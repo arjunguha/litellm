@@ -1,7 +1,7 @@
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 
-import { Button } from "antd";
+import { Alert, Button } from "antd";
 import BulkEditUserModal from "./BulkEditUsers";
 import { CreateUserButton } from "./CreateUserButton";
 import EditUserModal from "./edit_user";
@@ -40,6 +40,7 @@ interface ViewUserDashboardProps {
   teams: any[] | null;
   setKeys: React.Dispatch<React.SetStateAction<object[] | null>>;
   orgAdminOrgIds?: Array<{organization_id: string, organization_alias: string}> | null;
+  isNoDatabaseMode?: boolean;
 }
 
 interface FilterState {
@@ -70,7 +71,7 @@ const initialFilters: FilterState = {
   sort_order: "desc",
 };
 
-const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, token, userRole, userID, teams, orgAdminOrgIds }) => {
+const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, token, userRole, userID, teams, orgAdminOrgIds, isNoDatabaseMode = false }) => {
   const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
   const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
@@ -290,7 +291,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
     handleDelete,
     handleResetPassword,
     () => { }, // placeholder function, will be overridden in UserDataTable
-  );
+  ).filter((column) => !isNoDatabaseMode || column.id !== "actions");
 
   return (
     <div className="w-full p-8 overflow-hidden">
@@ -304,11 +305,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
             </>
           ) : userID && accessToken ? (
             <>
-              {isProxyAdmin && (
+              {isProxyAdmin && !isNoDatabaseMode && (
                 <CreateUserButton userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
               )}
 
-              {isProxyAdmin && (
+              {isProxyAdmin && !isNoDatabaseMode && (
                 <Button
                   onClick={handleToggleSelectionMode}
                   type={selectionMode ? "primary" : "default"}
@@ -318,7 +319,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
                 </Button>
               )}
 
-              {isProxyAdmin && selectionMode && (
+              {isProxyAdmin && !isNoDatabaseMode && selectionMode && (
                 <Button type="primary" onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
                   Bulk Edit ({selectedUsers.length} selected)
                 </Button>
@@ -327,12 +328,29 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
           ) : null}
         </div>
       </div>
+      {isNoDatabaseMode && (
+        <Alert
+          type="warning"
+          showIcon
+          className="mb-4"
+          message="Users are managed from configuration"
+          description="API keys and user passwords are stored in secrets.yaml and are visible to LiteLLM admins. Use a fresh password. Add or remove users in the config file and set passwords from the CLI."
+        />
+      )}
 
       {isProxyAdmin ? (
-        <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "users" : "settings")}>
+        <TabGroup
+          defaultIndex={0}
+          onIndexChange={(index) => {
+            if (isNoDatabaseMode && index === 1) {
+              return;
+            }
+            setActiveTab(index === 0 ? "users" : "settings");
+          }}
+        >
           <TabList className="mb-4">
             <Tab>Users</Tab>
-            <Tab>Default User Settings</Tab>
+            <Tab disabled={isNoDatabaseMode}>Default User Settings</Tab>
           </TabList>
 
           <TabPanels>
@@ -365,11 +383,19 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
                 userListResponse={userListResponse}
                 currentPage={currentPage}
                 handlePageChange={handlePageChange}
+                readOnly={isNoDatabaseMode}
               />
             </TabPanel>
 
             <TabPanel>
-              {!userID || !userRole || !accessToken ? (
+              {isNoDatabaseMode ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Default user settings require a database"
+                  description="In config-backed mode, define user defaults directly in the config file."
+                />
+              ) : !userID || !userRole || !accessToken ? (
                 <div className="flex justify-center items-center h-64">
                   <Skeleton active paragraph={{ rows: 4 }} />
                 </div>
@@ -413,6 +439,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
           userListResponse={userListResponse}
           currentPage={currentPage}
           handlePageChange={handlePageChange}
+          readOnly={isNoDatabaseMode}
         />
       )}
 

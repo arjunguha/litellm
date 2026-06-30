@@ -136,6 +136,9 @@ async def authenticate_user(  # noqa: PLR0915
         )
 
     ui_username, ui_password = get_ui_credentials(master_key)
+    from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+    no_db_store = get_no_db_admin_store()
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
     _user_row: Optional[LiteLLM_UserTable] = None
@@ -178,6 +181,20 @@ async def authenticate_user(  # noqa: PLR0915
             key_user_id = os.getenv("PROXY_ADMIN_ID", LITELLM_PROXY_ADMIN_NAME)
 
         # Admin is Authe'd in - generate key for the UI to access Proxy
+        if no_db_store is not None and os.getenv("DATABASE_URL") is None:
+            admin_user = no_db_store.ensure_default_admin_user()
+            key = no_db_store.create_ui_session_key(
+                user_id=key_user_id,
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                user_email=admin_user.user_email,
+            )
+            return LoginResult(
+                user_id=key_user_id,
+                key=key,
+                user_email=admin_user.user_email,
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                login_method="username_password",
+            )
 
         # ensure this user is set as the proxy admin, in this route there is no sso, we can assume this user is only the admin
         await user_update(
@@ -248,6 +265,37 @@ async def authenticate_user(  # noqa: PLR0915
             user_email=None,
             user_role=user_role,
             login_method="username_password",
+        )
+
+    elif no_db_store is not None:
+        _user_row = no_db_store.get_user_by_email(username) or no_db_store.get_user(
+            username
+        )
+        if _user_row is not None and no_db_store.verify_user_password(
+            _user_row, password
+        ):
+            user_id = _user_row.user_id
+            user_role = getattr(
+                _user_row, "user_role", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+            )
+            user_email = getattr(_user_row, "user_email", None)
+            key = no_db_store.create_ui_session_key(
+                user_id=user_id,
+                user_role=cast(str, user_role),
+                user_email=user_email,
+            )
+            return LoginResult(
+                user_id=user_id,
+                key=key,
+                user_email=user_email,
+                user_role=cast(str, user_role),
+                login_method="username_password",
+            )
+        raise ProxyException(
+            message=f"Invalid credentials used to access UI.\nNot valid credentials for {username}",
+            type=ProxyErrorTypes.auth_error,
+            param="invalid_credentials",
+            code=401,
         )
 
     elif _user_row is not None:

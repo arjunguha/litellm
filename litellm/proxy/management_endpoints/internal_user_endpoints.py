@@ -412,9 +412,14 @@ async def new_user(
      -d '{
          "username": "new_user",
          "email": "new_user@example.com"
-     }'
+    }'
     ```
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     try:
         from litellm.proxy.proxy_server import _license_check, prisma_client
 
@@ -770,9 +775,34 @@ async def user_info(  # noqa: PLR0915
         _enforce_user_info_access(user_id=user_id, user_api_key_dict=user_api_key_dict)
 
         if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
+            from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+            no_db_store = get_no_db_admin_store()
+            if no_db_store is None:
+                raise Exception(
+                    "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                )
+            if (
+                user_id is None
+                and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+            ):
+                user_id = user_api_key_dict.user_id
+            elif user_id is None:
+                user_id = user_api_key_dict.user_id
+            if user_id is None:
+                raise HTTPException(status_code=404, detail="User not found")
+            user_info_obj, keys, teams = no_db_store.user_info(user_id)
+            if user_info_obj is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"User {user_id} not found",
+                )
+            return {
+                "user_id": user_id,
+                "user_info": user_info_obj,
+                "keys": [no_db_store.serialize_key_auth(key) for key in keys],
+                "teams": teams,
+            }
         if (
             user_id is None
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
@@ -1397,6 +1427,11 @@ async def user_update(
         - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
 
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     try:
         verbose_proxy_logger.debug("/user/update: Received data = %s", data)
 
@@ -1941,10 +1976,51 @@ async def get_users(
     )
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"No db connected. prisma client={prisma_client}"},
+        from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+        no_db_store = get_no_db_admin_store()
+        if no_db_store is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": f"No db connected. prisma client={prisma_client}"},
+            )
+        user_id_list = (
+            [uid.strip() for uid in user_ids.split(",") if uid.strip()]
+            if isinstance(user_ids, str)
+            else None
         )
+        users = no_db_store.list_users(
+            role=role,
+            user_email=user_email,
+            team=team,
+            user_ids=user_id_list,
+        )
+        reverse = sort_order.lower() == "desc"
+        if sort_by in {"user_id", "user_email", "created_at", "spend"}:
+            users = sorted(
+                users,
+                key=lambda user: getattr(user, sort_by, None) or "",
+                reverse=reverse,
+            )
+        total_count = len(users)
+        start = (page - 1) * page_size
+        end = start + page_size
+        key_counts = {}
+        for key_auth in no_db_store.iter_key_auth():
+            if key_auth.user_id:
+                key_counts[key_auth.user_id] = key_counts.get(key_auth.user_id, 0) + 1
+        return {
+            "users": [
+                LiteLLM_UserTableWithKeyCount(
+                    **user.model_dump(), key_count=key_counts.get(user.user_id, 0)
+                )
+                for user in users[start:end]
+            ],
+            "total": total_count,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": -(-total_count // page_size) if page_size else 0,
+        }
 
     # Server-side authorization: proxy admins see all, org admins see only their org(s)
     organization_ids = await _authorize_user_list_request(
@@ -2091,6 +2167,11 @@ async def delete_user(
     Parameters:
     - user_ids: List[str] - The list of user id's to be deleted.
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     from litellm.proxy.management_endpoints.team_endpoints import (
         _cleanup_members_with_roles,
     )

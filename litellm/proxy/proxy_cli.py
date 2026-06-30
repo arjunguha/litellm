@@ -621,6 +621,52 @@ class ProxyInitializationHelpers:
     default=False,
     help="Enable uvicorn hot reload (dev only). Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
 )
+@click.option(
+    "--secrets-file",
+    default="secrets.yaml",
+    help="Path to secrets.yaml for no_database_admin_ui CLI operations.",
+)
+@click.option(
+    "--set-user-password",
+    default=None,
+    help="Set a no_database_admin_ui user's password in secrets.yaml and exit.",
+)
+@click.option(
+    "--password",
+    default=None,
+    help="Password value for --set-user-password.",
+)
+@click.option(
+    "--add-api-key",
+    default=None,
+    help="Add or update a no_database_admin_ui API key alias in secrets.yaml and exit.",
+)
+@click.option(
+    "--api-key",
+    default=None,
+    help="API key secret value for --add-api-key.",
+)
+@click.option(
+    "--key-user-id",
+    default=None,
+    help="User id to associate with --add-api-key.",
+)
+@click.option(
+    "--key-team-id",
+    default=None,
+    help="Team id to associate with --add-api-key.",
+)
+@click.option(
+    "--delete-api-key",
+    default=None,
+    help="Delete a no_database_admin_ui API key by alias, hash, or secret value and exit.",
+)
+@click.option(
+    "--list-no-db-secrets",
+    is_flag=True,
+    default=False,
+    help="List no_database_admin_ui users and API key aliases in secrets.yaml and exit.",
+)
 def run_server(  # noqa: PLR0915
     host,
     port,
@@ -665,6 +711,15 @@ def run_server(  # noqa: PLR0915
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
     reload: bool,
+    secrets_file: str,
+    set_user_password: Optional[str],
+    password: Optional[str],
+    add_api_key: Optional[str],
+    api_key: Optional[str],
+    key_user_id: Optional[str],
+    key_team_id: Optional[str],
+    delete_api_key: Optional[str],
+    list_no_db_secrets: bool,
 ):
     if setup:
         from litellm.setup_wizard import run_setup_wizard
@@ -706,6 +761,40 @@ def run_server(  # noqa: PLR0915
                 )
     if version is True:
         ProxyInitializationHelpers._echo_litellm_version()
+        return
+    if set_user_password or add_api_key or delete_api_key or list_no_db_secrets is True:
+        from litellm.proxy.no_db_admin import NoDBAdminStore
+
+        no_db_store = NoDBAdminStore(
+            users_config=[],
+            teams_config=[],
+            secrets_file_path=secrets_file,
+        )
+        if set_user_password:
+            if password is None:
+                raise click.UsageError(
+                    "--password is required with --set-user-password"
+                )
+            no_db_store.set_user_password(set_user_password, password)
+            click.echo(f"Updated password hash for user_id={set_user_password}")
+        if add_api_key:
+            if api_key is None:
+                raise click.UsageError("--api-key is required with --add-api-key")
+            no_db_store.upsert_api_key(
+                key_alias=add_api_key,
+                key=api_key,
+                user_id=key_user_id,
+                team_id=key_team_id,
+            )
+            click.echo(f"Updated API key alias={add_api_key}")
+        if delete_api_key:
+            deleted = no_db_store.delete_api_key(delete_api_key)
+            click.echo("Deleted API key" if deleted else "API key not found")
+        if list_no_db_secrets:
+            no_db_store.reload()
+            users = sorted(no_db_store._secrets.get("users", {}).keys())
+            keys = sorted(no_db_store._secrets.get("keys", {}).keys())
+            click.echo(json.dumps({"users": users, "keys": keys}, indent=2))
         return
     if model and "ollama" in model and api_base is None:
         ProxyInitializationHelpers._run_ollama_serve()

@@ -2352,6 +2352,13 @@ async def get_key_object(
     - if not, then raise an error
     """
     if prisma_client is None:
+        from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+        no_db_store = get_no_db_admin_store()
+        if no_db_store is not None:
+            key_auth = no_db_store.get_key_auth_by_hash(hashed_token)
+            if key_auth is not None:
+                return key_auth
         raise Exception(
             "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
         )

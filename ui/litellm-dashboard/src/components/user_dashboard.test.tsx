@@ -1,5 +1,5 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import React from "react";
 import { renderWithProviders } from "../../tests/test-utils";
 
@@ -59,7 +59,9 @@ vi.mock("./organisms/create_key_button", () => ({
 }));
 
 vi.mock("./VirtualKeysPage/VirtualKeysTable", () => ({
-  VirtualKeysTable: () => <div data-testid="virtual-keys-table-mock" />,
+  VirtualKeysTable: ({ readOnly }: { readOnly?: boolean }) => (
+    <div data-testid="virtual-keys-table-mock" data-read-only={String(readOnly)} />
+  ),
 }));
 
 vi.mock("../app/onboarding/page", () => ({
@@ -136,5 +138,28 @@ describe("UserDashboard beforeunload listener", () => {
       ([event]) => event === "beforeunload",
     );
     expect(removeCalls).toHaveLength(1);
+  });
+});
+
+describe("UserDashboard config-backed mode", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("should show the config-backed mode warning", () => {
+    renderDashboard({ isNoDatabaseMode: true });
+
+    expect(screen.getByText("Config-backed admin mode")).toBeInTheDocument();
+    expect(screen.getByText(/visible to LiteLLM admins/i)).toBeInTheDocument();
+  });
+
+  it("should disable key creation and keep the existing keys table read-only", () => {
+    renderDashboard({ isNoDatabaseMode: true });
+
+    expect(screen.queryByTestId("create-key-mock")).not.toBeInTheDocument();
+    expect(screen.getByTestId("virtual-keys-table-mock")).toHaveAttribute(
+      "data-read-only",
+      "true",
+    );
   });
 });

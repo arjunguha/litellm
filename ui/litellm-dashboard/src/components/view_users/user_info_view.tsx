@@ -37,6 +37,7 @@ interface UserInfoViewProps {
   possibleUIRoles: Record<string, Record<string, string>> | null;
   initialTab?: number; // 0 for Overview, 1 for Details
   startInEditMode?: boolean;
+  readOnly?: boolean;
 }
 
 /** Team info used for display in user detail view */
@@ -54,13 +55,14 @@ export default function UserInfoView({
   possibleUIRoles,
   initialTab = 0,
   startInEditMode = false,
+  readOnly = false,
 }: UserInfoViewProps) {
   const [userData, setUserData] = useState<UserInfoV2Response | null>(null);
   const [teamDetails, setTeamDetails] = useState<TeamDisplayInfo[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isEditing, setIsEditing] = useState(startInEditMode);
+  const [isEditing, setIsEditing] = useState(!readOnly && startInEditMode);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
@@ -371,7 +373,7 @@ export default function UserInfoView({
             />
           </div>
         </div>
-        {userRole && rolesWithWriteAccess.includes(userRole) && (
+        {!readOnly && userRole && rolesWithWriteAccess.includes(userRole) && (
           <div className="flex items-center space-x-2">
             <Button icon={RefreshIcon} variant="secondary" onClick={handleResetPassword} className="flex items-center">
               Reset Password
@@ -527,7 +529,7 @@ export default function UserInfoView({
             <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>User Settings</Title>
-                {!isEditing && userRole && rolesWithWriteAccess.includes(userRole) && (
+                {!isEditing && !readOnly && userRole && rolesWithWriteAccess.includes(userRole) && (
                   <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
                 )}
               </div>

@@ -2330,6 +2330,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     database_type: Optional[Literal["dynamo_db"]] = Field(
         None, description="to use dynamodb instead of postgres db"
     )
+    no_database_admin_ui: Optional[bool] = Field(
+        None,
+        description="Run Admin UI identity and key management from config.yaml + secrets.yaml without connecting to a database.",
+    )
+    secrets_file: Optional[str] = Field(
+        None,
+        description="Path to secrets.yaml used when no_database_admin_ui is enabled.",
+    )
     database_args: Optional[DynamoDBArgs] = Field(
         None,
         description="custom args for instantiating dynamodb client - e.g. billing provision",
@@ -2479,6 +2487,14 @@ class ConfigYAML(LiteLLMPydanticObjectBase):
     router_settings: Optional[UpdateRouterConfig] = Field(
         None,
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
+    )
+    users: Optional[List[dict]] = Field(
+        None,
+        description="Static Admin UI users for no_database_admin_ui mode.",
+    )
+    teams: Optional[List[dict]] = Field(
+        None,
+        description="Static Admin UI teams for no_database_admin_ui mode.",
     )
 
     model_config = ConfigDict(protected_namespaces=())

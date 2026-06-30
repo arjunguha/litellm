@@ -898,6 +898,11 @@ async def new_team(  # noqa: PLR0915
             }'
     ```
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     try:
         from litellm.proxy.proxy_server import (
             _license_check,
@@ -1572,6 +1577,11 @@ async def update_team(  # noqa: PLR0915
     }'
     ```
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     try:
         from litellm.proxy.auth.auth_checks import _cache_team_object
         from litellm.proxy.proxy_server import (
@@ -3042,6 +3052,11 @@ async def delete_team(
     }'
     ```
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
         litellm_proxy_admin_name,
@@ -3365,11 +3380,37 @@ async def team_info(
 
     try:
         if prisma_client is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={
-                    "error": "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-                },
+            from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+            no_db_store = get_no_db_admin_store()
+            if no_db_store is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={
+                        "error": "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                    },
+                )
+            if team_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"message": "Malformed request. No team id passed in."},
+                )
+            team = no_db_store.get_team(team_id)
+            if team is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"message": f"Team not found, passed team id: {team_id}."},
+                )
+            keys = [
+                no_db_store.serialize_key_auth(key_auth)
+                for key_auth in no_db_store.iter_key_auth()
+                if key_auth.team_id == team_id
+            ]
+            return TeamInfoResponseObject(
+                team_id=team_id,
+                team_info=TeamInfoResponseObjectTeamTable(**team.model_dump()),
+                keys=keys,
+                team_memberships=no_db_store.team_memberships(team_id),
             )
         if team_id is None:
             raise HTTPException(
@@ -3633,6 +3674,11 @@ async def block_team(
 
 
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -3685,6 +3731,11 @@ async def unblock_team(
     }'
     ```
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -3721,10 +3772,38 @@ async def list_available_teams(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+        no_db_store = get_no_db_admin_store()
+        if no_db_store is None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        available_teams = cast(
+            Optional[List[str]],
+            (
+                litellm.default_internal_user_params.get("available_teams")
+                if litellm.default_internal_user_params is not None
+                else None
+            ),
         )
+        if available_teams is None:
+            return []
+        user_info = no_db_store.get_user(user_api_key_dict.user_id)
+        if user_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "User not found"},
+            )
+        available_teams = [
+            team for team in available_teams if team not in user_info.teams
+        ]
+        return [
+            team
+            for team_id in available_teams
+            if (team := no_db_store.get_team(team_id)) is not None
+        ]
 
     available_teams = cast(
         Optional[List[str]],
@@ -4067,9 +4146,43 @@ async def list_team_v2(
     )
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"No db connected. prisma client={prisma_client}"},
+        from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+        no_db_store = get_no_db_admin_store()
+        if no_db_store is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": f"No db connected. prisma client={prisma_client}"},
+            )
+        teams = no_db_store.list_teams(
+            user_id=user_id,
+            team_id=team_id,
+            team_alias=team_alias,
+        )
+        if organization_id:
+            teams = [team for team in teams if team.organization_id == organization_id]
+        reverse = sort_order.lower() == "desc"
+        if sort_by in {"team_id", "team_alias", "created_at"}:
+            teams = sorted(
+                teams,
+                key=lambda team: getattr(team, sort_by, None) or "",
+                reverse=reverse,
+            )
+        total_count = len(teams)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return TeamListResponse(
+            teams=[
+                TeamListItem(
+                    **team.model_dump(),
+                    members_count=len(team.members_with_roles or team.members or []),
+                )
+                for team in teams[start:end]
+            ],
+            total=total_count,
+            page=page,
+            page_size=page_size,
+            total_pages=-(-total_count // page_size) if page_size else 0,
         )
 
     # --- Access control ---

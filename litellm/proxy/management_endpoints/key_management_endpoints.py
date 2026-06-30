@@ -1398,6 +1398,11 @@ async def generate_key_fn(
     - expires: (datetime) Datetime object for when key expires.
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     try:
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
@@ -2418,6 +2423,11 @@ async def update_key_fn(  # noqa: PLR0915
     }'
     ```
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     from litellm.proxy.proxy_server import (
         llm_router,
         premium_user,
@@ -2816,6 +2826,11 @@ async def delete_key_fn(
     Raises:
         HTTPException: If an error occurs during key deletion.
     """
+    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+
+    if get_no_db_admin_store() is not None:
+        raise no_db_admin_error()
+
     try:
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -2929,9 +2944,41 @@ async def info_key_fn_v2(
 
     try:
         if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
+            from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+            no_db_store = get_no_db_admin_store()
+            if no_db_store is None:
+                raise Exception(
+                    "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                )
+            if data is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"message": "Malformed request. No keys passed in."},
+                )
+            requested = list(data.keys or [])
+            if data.key_aliases:
+                requested.extend(data.key_aliases)
+            key_info = []
+            for requested_key in requested:
+                lookup_hash = (
+                    hash_token(requested_key)
+                    if requested_key.startswith("sk-")
+                    else requested_key
+                )
+                key_auth = no_db_store.get_key_auth_by_hash(lookup_hash)
+                if key_auth is None:
+                    key_auth = next(
+                        (
+                            candidate
+                            for candidate in no_db_store.iter_key_auth()
+                            if candidate.key_alias == requested_key
+                        ),
+                        None,
+                    )
+                if key_auth is not None:
+                    key_info.append(no_db_store.serialize_key_auth(key_auth))
+            return {"key": data.keys, "info": key_info}
         if data is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -3010,9 +3057,31 @@ async def info_key_fn(
 
     try:
         if prisma_client is None:
-            raise Exception(
-                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
-            )
+            from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+            no_db_store = get_no_db_admin_store()
+            if no_db_store is None:
+                raise Exception(
+                    "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+                )
+            key = key or user_api_key_dict.api_key
+            if key is None:
+                raise ProxyException(
+                    message="Key not found",
+                    type=ProxyErrorTypes.not_found_error,
+                    param="key",
+                    code=status.HTTP_404_NOT_FOUND,
+                )
+            hashed_key = hash_token(key) if key.startswith("sk-") else key
+            key_auth = no_db_store.get_key_auth_by_hash(hashed_key)
+            if key_auth is None:
+                raise ProxyException(
+                    message="Key not found in secrets.yaml",
+                    type=ProxyErrorTypes.not_found_error,
+                    param="key",
+                    code=status.HTTP_404_NOT_FOUND,
+                )
+            return {"key": key, "info": no_db_store.serialize_key_auth(key_auth)}
 
         # default to using Auth token if no key is passed in
         key = key or user_api_key_dict.api_key
@@ -4710,8 +4779,65 @@ async def list_keys(
         verbose_proxy_logger.debug("Entering list_keys function")
 
         if prisma_client is None:
-            verbose_proxy_logger.error("Database not connected")
-            raise Exception("Database not connected")
+            from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+            no_db_store = get_no_db_admin_store()
+            if no_db_store is None:
+                verbose_proxy_logger.error("Database not connected")
+                raise Exception("Database not connected")
+
+            key_auths = no_db_store.iter_key_auth(include_sessions=False)
+            is_proxy_admin = user_api_key_dict.user_role in [
+                LitellmUserRoles.PROXY_ADMIN,
+                LitellmUserRoles.PROXY_ADMIN.value,
+                LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+                LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            ]
+            if not is_proxy_admin:
+                caller_teams = getattr(user_api_key_dict, "teams", []) or []
+                key_auths = [
+                    key_auth
+                    for key_auth in key_auths
+                    if key_auth.user_id == user_api_key_dict.user_id
+                    or (
+                        key_auth.team_id is not None
+                        and key_auth.team_id in caller_teams
+                    )
+                ]
+            if user_id:
+                key_auths = [
+                    key_auth
+                    for key_auth in key_auths
+                    if key_auth.user_id and user_id.lower() in key_auth.user_id.lower()
+                ]
+            if team_id:
+                key_auths = [
+                    key_auth for key_auth in key_auths if key_auth.team_id == team_id
+                ]
+            if key_hash:
+                key_auths = [
+                    key_auth for key_auth in key_auths if key_auth.token == key_hash
+                ]
+            if key_alias:
+                key_auths = [
+                    key_auth
+                    for key_auth in key_auths
+                    if key_auth.key_alias
+                    and key_alias.lower() in key_auth.key_alias.lower()
+                ]
+            total_count = len(key_auths)
+            start = (page - 1) * size
+            end = start + size
+            keys = [
+                no_db_store.serialize_key_auth(key_auth)
+                for key_auth in key_auths[start:end]
+            ]
+            return {
+                "keys": keys,
+                "total_count": total_count,
+                "current_page": page,
+                "total_pages": -(-total_count // size) if size else 0,
+            }
 
         # Validate status parameter
         if status is not None and status != "deleted":

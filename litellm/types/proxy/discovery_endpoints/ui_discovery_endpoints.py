@@ -11,5 +11,6 @@ class UiDiscoveryEndpoints(BaseModel):
     auto_redirect_to_sso: bool
     admin_ui_disabled: bool
     sso_configured: bool
+    database_mode: str = "database"
     is_control_plane: bool = False
     workers: List[WorkerRegistryEntry] = []

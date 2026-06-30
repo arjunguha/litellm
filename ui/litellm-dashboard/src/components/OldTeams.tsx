@@ -16,6 +16,7 @@ import {
   TextInput,
 } from "@tremor/react";
 import {
+  Alert,
   Button,
   Card,
   Flex,
@@ -77,6 +78,7 @@ interface TeamProps {
   userRole: string | null;
   organizations: Organization[] | null;
   premiumUser?: boolean;
+  isNoDatabaseMode?: boolean;
 }
 
 interface FilterState {
@@ -189,6 +191,7 @@ const Teams: React.FC<TeamProps> = ({
   userRole,
   organizations,
   premiumUser = false,
+  isNoDatabaseMode = false,
 }) => {
   console.log(`organizations: ${JSON.stringify(organizations)}`);
   const { data: organizationsData } = useOrganizations();
@@ -839,7 +842,7 @@ const Teams: React.FC<TeamProps> = ({
                 .catch(() => message.error("Failed to copy"));
             }}
           />
-          {userRole === "Admin" && (
+          {userRole === "Admin" && !isNoDatabaseMode && (
             <>
               <TableIconActionButton
                 variant="Edit"
@@ -909,7 +912,7 @@ const Teams: React.FC<TeamProps> = ({
                   Create your first team to organize members and manage access to models.
                 </Text>
               </div>
-              {canCreateOrManageTeams(userRole, userID, organizations) && (
+              {canCreateOrManageTeams(userRole, userID, organizations) && !isNoDatabaseMode && (
                 <Button
                   type="primary"
                   icon={<PlusOutlined />}
@@ -1006,6 +1009,7 @@ const Teams: React.FC<TeamProps> = ({
       children: <AvailableTeamsPanel accessToken={accessToken} userID={userID} />,
     },
     ...(isProxyAdminRole(userRole || "")
+      && !isNoDatabaseMode
       ? [
           {
             key: "default-settings",
@@ -1043,7 +1047,7 @@ const Teams: React.FC<TeamProps> = ({
           is_team_admin={is_team_admin(teams?.find((team) => team.team_id === selectedTeamId))}
           is_proxy_admin={userRole == "Admin"}
           userModels={userModels}
-          editTeam={editTeam}
+          editTeam={!isNoDatabaseMode && editTeam}
           premiumUser={premiumUser}
         />
       ) : (
@@ -1058,18 +1062,27 @@ const Teams: React.FC<TeamProps> = ({
                 Manage teams, members, and their access to models and budgets
               </Text>
             </Space>
-            {canCreateOrManageTeams(userRole, userID, organizations) && (
+            {canCreateOrManageTeams(userRole, userID, organizations) && !isNoDatabaseMode && (
               <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsTeamModalVisible(true)} data-testid="create-team-button">
                 Create Team
               </Button>
             )}
           </Flex>
+          {isNoDatabaseMode && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="Teams are managed from configuration"
+              description="Add or remove teams in the config file. API keys and user passwords are stored in secrets.yaml and are visible to LiteLLM admins."
+            />
+          )}
 
           <Tabs items={tabItems} />
         </>
       )}
 
-      {canCreateOrManageTeams(userRole, userID, organizations) && (
+      {canCreateOrManageTeams(userRole, userID, organizations) && !isNoDatabaseMode && (
             <Modal
               title="Create Team"
               open={isTeamModalVisible}

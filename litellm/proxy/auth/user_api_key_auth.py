@@ -1213,12 +1213,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
-            raise ProxyException(
-                message="No connected db.",
-                type=ProxyErrorTypes.no_db_connection,
-                code=400,
-                param=None,
-            )
+            from litellm.proxy.no_db_admin import get_no_db_admin_store
+
+            if get_no_db_admin_store() is None:
+                raise ProxyException(
+                    message="No connected db.",
+                    type=ProxyErrorTypes.no_db_connection,
+                    code=400,
+                    param=None,
+                )
 
         if valid_token is None:
             if isinstance(

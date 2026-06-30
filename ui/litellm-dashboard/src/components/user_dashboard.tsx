@@ -3,6 +3,7 @@ import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { Col, Grid } from "@tremor/react";
 import { jwtDecode } from "jwt-decode";
 import { useSearchParams } from "next/navigation";
+import { Alert } from "antd";
 import React, { useEffect, useState } from "react";
 import Onboarding from "../app/onboarding/page";
 import { fetchTeams } from "./common_components/fetch_teams";
@@ -50,6 +51,7 @@ interface UserDashboardProps {
   createClicked: boolean;
   autoOpenCreate?: boolean;
   prefillData?: CreateKeyPrefillData;
+  isNoDatabaseMode?: boolean;
 }
 
 type TeamInterface = {
@@ -74,6 +76,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   createClicked,
   autoOpenCreate,
   prefillData,
+  isNoDatabaseMode = false,
 }) => {
   const [userSpendData, setUserSpendData] = useState<UserInfo | null>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
@@ -319,7 +322,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   // Admin Viewer can view keys read-only — gate "Create Key" but render the
   // virtual-keys table the same as for Proxy Admin (read parity). Every
   // other role keeps its existing ability to create keys.
-  const canCreateKey = userRole !== "Admin Viewer" && userRole !== "proxy_admin_viewer";
+  const canCreateKey = !isNoDatabaseMode && userRole !== "Admin Viewer" && userRole !== "proxy_admin_viewer";
 
   console.log("inside user dashboard, selected team", selectedTeam);
   console.log("All cookies after redirect:", document.cookie);
@@ -327,6 +330,14 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
+          {isNoDatabaseMode && (
+            <Alert
+              type="warning"
+              showIcon
+              message="Config-backed admin mode"
+              description="API keys and user passwords are stored in secrets.yaml and are visible to LiteLLM admins. Use a fresh password. Manage users, teams, passwords, and API keys from the config file and CLI."
+            />
+          )}
           {canCreateKey && (
             <CreateKey
               key={selectedTeam ? selectedTeam.team_id : null}
@@ -338,7 +349,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               prefillData={prefillData}
             />
           )}
-          <VirtualKeysTable teams={teams} organizations={organizations} />
+          <VirtualKeysTable teams={teams} organizations={organizations} readOnly={isNoDatabaseMode} />
         </Col>
       </Grid>
     </div>

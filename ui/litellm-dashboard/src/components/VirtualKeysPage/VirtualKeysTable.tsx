@@ -45,6 +45,7 @@ interface VirtualKeysTableProps {
     sortBy: string;
     sortOrder: "asc" | "desc";
   };
+  readOnly?: boolean;
 }
 
 /**
@@ -52,7 +53,7 @@ interface VirtualKeysTableProps {
  * The team selector and filtering have been removed so that all keys are shown.
  */
 
-export function VirtualKeysTable({ teams, organizations, onSortChange, currentSort }: VirtualKeysTableProps) {
+export function VirtualKeysTable({ teams, organizations, onSortChange, currentSort, readOnly = false }: VirtualKeysTableProps) {
   const { data: fetchedOrganizations } = useOrganizations();
   const resolvedOrganizations = fetchedOrganizations ?? organizations ?? [];
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
@@ -218,7 +219,10 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       header: "Secret Key",
       size: 120,
       enableSorting: false,
-      cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
+      cell: (info) => {
+        const key = info.row.original.key || (info.getValue() as string);
+        return <span className="font-mono text-xs">{key}</span>;
+      },
     },
     {
       id: "team_alias",
@@ -710,6 +714,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
           keyData={selectedKey}
           teams={allTeams}
           onDelete={refetch}
+          readOnly={readOnly}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">

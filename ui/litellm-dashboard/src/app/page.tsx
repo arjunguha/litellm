@@ -189,6 +189,7 @@ function CreateKeyPageContent() {
 
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isNoDatabaseMode, setIsNoDatabaseMode] = useState(false);
 
   // Track if we've already attempted a return URL redirect to prevent race conditions
   const hasAttemptedReturnRedirectRef = useRef(false);
@@ -208,7 +209,10 @@ function CreateKeyPageContent() {
 
     (async () => {
       try {
-        await getUiConfig(); // ensures proxyBaseUrl etc. are ready
+        const uiConfig = await getUiConfig(); // ensures proxyBaseUrl etc. are ready
+        if (!cancelled) {
+          setIsNoDatabaseMode(uiConfig.database_mode === "config");
+        }
       } catch {
         // proceed regardless; we still need to decide auth state
       }
@@ -469,6 +473,7 @@ function CreateKeyPageContent() {
                 organizations={organizations}
                 addKey={addKey}
                 createClicked={createClicked}
+                isNoDatabaseMode={isNoDatabaseMode}
               />
             ) : (
               <div className="flex flex-col min-h-screen">
@@ -507,6 +512,7 @@ function CreateKeyPageContent() {
                       createClicked={createClicked}
                       autoOpenCreate={autoOpenCreate}
                       prefillData={prefillData}
+                      isNoDatabaseMode={isNoDatabaseMode}
                     />
                   ) : page == "models" ? (
                     <OldModelDashboard
@@ -528,6 +534,7 @@ function CreateKeyPageContent() {
                       teams={teams}
                       accessToken={accessToken}
                       setKeys={setKeys}
+                      isNoDatabaseMode={isNoDatabaseMode}
                     />
                   ) : page == "teams" ? (
                     <OldTeams
@@ -539,6 +546,7 @@ function CreateKeyPageContent() {
                       organizations={organizations}
                       premiumUser={premiumUser}
                       searchParams={searchParams}
+                      isNoDatabaseMode={isNoDatabaseMode}
                     />
                   ) : page == "organizations" ? (
                     <Organizations
