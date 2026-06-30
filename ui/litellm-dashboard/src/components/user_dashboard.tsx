@@ -322,7 +322,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   // Admin Viewer can view keys read-only — gate "Create Key" but render the
   // virtual-keys table the same as for Proxy Admin (read parity). Every
   // other role keeps its existing ability to create keys.
-  const canCreateKey = !isNoDatabaseMode && userRole !== "Admin Viewer" && userRole !== "proxy_admin_viewer";
+  const canCreateKey = userRole !== "Admin Viewer" && userRole !== "proxy_admin_viewer";
 
   console.log("inside user dashboard, selected team", selectedTeam);
   console.log("All cookies after redirect:", document.cookie);
@@ -335,7 +335,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               type="warning"
               showIcon
               message="Config-backed admin mode"
-              description="API keys and user passwords are stored in secrets.yaml and are visible to LiteLLM admins. Use a fresh password. Manage users, teams, passwords, and API keys from the config file and CLI."
+              description="API keys and user passwords are stored in secrets.yaml and are visible to LiteLLM admins. Use a fresh password. Users and teams are managed from the config file; API keys created here are written to secrets.yaml."
             />
           )}
           {canCreateKey && (

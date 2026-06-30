@@ -912,6 +912,295 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     return response
 
 
+async def _no_db_key_generation_helper(
+    data: GenerateKeyRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str],
+) -> GenerateKeyResponse:
+    from litellm.proxy.no_db_admin import (
+        NoDBAdminStore,
+        _parse_datetime,
+        get_no_db_admin_store,
+    )
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        llm_router,
+        premium_user,
+        user_custom_key_generate,
+    )
+
+    no_db_store = cast(Optional[NoDBAdminStore], get_no_db_admin_store())
+    if no_db_store is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    await check_org_admin_can_generate_keys(user_api_key_dict=user_api_key_dict)
+
+    if data.max_budget is not None and data.max_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"max_budget cannot be negative. Received: {data.max_budget}"
+            },
+        )
+    if data.soft_budget is not None and data.soft_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"soft_budget cannot be negative. Received: {data.soft_budget}"
+            },
+        )
+
+    if user_custom_key_generate is not None:
+        if inspect.iscoroutinefunction(user_custom_key_generate):
+            result = await user_custom_key_generate(data)  # type: ignore
+        else:
+            raise ValueError("user_custom_key_generate must be a coroutine")
+        decision = result.get("decision", True)
+        message = result.get("message", "Authentication Failed - Custom Auth Rule")
+        if not decision:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
+
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_passthrough_routes_caller_permission(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    is_proxy_admin = (
+        user_api_key_dict.user_role is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+    if not is_proxy_admin and data.user_id is None:
+        data.user_id = user_api_key_dict.user_id
+
+    team_table = None
+    if data.team_id is not None:
+        team_table = no_db_store.get_team(data.team_id)
+        if team_table is None and not is_proxy_admin:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot create keys for non-existent teams.",
+            )
+
+    key_generation_check(
+        team_table=cast(Optional[LiteLLM_TeamTableCachedObj], team_table),
+        user_api_key_dict=user_api_key_dict,
+        data=data,
+        route=KeyManagementRoutes.KEY_GENERATE,
+    )
+    common_key_access_checks(
+        user_api_key_dict=user_api_key_dict,
+        data=data,
+        llm_router=llm_router,
+        premium_user=premium_user,
+    )
+
+    if litellm.default_key_generate_params is not None:
+        for elem in data:
+            key, value = elem
+            if value is None and key in [
+                "max_budget",
+                "user_id",
+                "team_id",
+                "max_parallel_requests",
+                "tpm_limit",
+                "rpm_limit",
+                "budget_duration",
+                "duration",
+            ]:
+                setattr(data, key, litellm.default_key_generate_params.get(key, None))
+            elif key == "models" and value == []:
+                setattr(data, key, litellm.default_key_generate_params.get(key, []))
+            elif key == "metadata" and value == {}:
+                setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+
+    _enforce_upperbound_key_params(data, fill_defaults=True)
+
+    try:
+        from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import (
+            apply_enterprise_key_management_params,
+        )
+
+        data = apply_enterprise_key_management_params(data, team_table)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {}".format(
+                str(e)
+            )
+        )
+
+    data_json = data.model_dump(exclude_unset=True, exclude_none=True)  # type: ignore
+    data_json = handle_key_type(data, data_json)
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data_json.get("allowed_routes"),
+        user_api_key_dict=user_api_key_dict,
+        allow_safe_presets=True,
+    )
+
+    if "tags" in data_json:
+        if premium_user is not True and data_json["tags"] is not None:
+            raise ValueError(
+                f"Only premium users can add tags to keys. {CommonProxyErrors.not_premium_user.value}"
+            )
+        metadata = data_json.get("metadata") or {}
+        metadata["tags"] = data_json["tags"]
+        data_json["metadata"] = metadata
+        data_json.pop("tags")
+
+    for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=data,
+                field_name=field,
+                value=getattr(data, field),
+            )
+            data_json.setdefault("metadata", {})[field] = getattr(data, field)
+
+    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+        if getattr(data, field, None) is not None:
+            _set_object_metadata_field(
+                object_data=data,
+                field_name=field,
+                value=getattr(data, field),
+            )
+            data_json.setdefault("metadata", {})[field] = getattr(data, field)
+
+    await validate_key_mcp_servers_against_team(
+        object_permission=data_json.get("object_permission"),
+        team_obj=team_table,
+    )
+    await validate_key_search_tools_against_team(
+        object_permission=data_json.get("object_permission"),
+        team_obj=team_table,
+    )
+
+    key_alias = data_json.get("key_alias")
+    _validate_key_alias_format(key_alias=key_alias)
+    if key_alias is not None and no_db_store.has_key_alias(key_alias):
+        raise ProxyException(
+            message=f"Key with alias '{key_alias}' already exists. Unique key aliases across all keys are required.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="key_alias",
+            code=400,
+        )
+
+    await _check_custom_key_allowed(data.key)
+    if data.key is not None and not data.key.startswith("sk-"):
+        masked = (
+            "{}****{}".format(data.key[:4], data.key[-4:])
+            if len(data.key) > 8
+            else "****"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid key format. LiteLLM Virtual Key must start with 'sk-'. Received: {masked}"
+            },
+        )
+
+    validate_model_max_budget(data_json.get("model_max_budget"))
+
+    key = data.key or f"sk-{secrets.token_urlsafe(LENGTH_OF_LITELLM_GENERATED_KEY)}"
+    expires = None
+    if data.duration is not None:
+        expires = datetime.now(timezone.utc) + timedelta(
+            seconds=duration_in_seconds(data.duration)
+        )
+
+    key_budget_duration = data_json.pop("budget_duration", None)
+    max_budget = data_json.pop("max_budget", None)
+    created_by = user_api_key_dict.user_id or litellm_proxy_admin_name
+    stored_key = no_db_store.upsert_api_key(
+        key_alias=key_alias,
+        key=key,
+        key_name=abbreviate_api_key(api_key=key),
+        expires=expires,
+        models=data_json.get("models") or [],
+        aliases=data_json.get("aliases") or {},
+        config=data_json.get("config") or {},
+        max_budget=max_budget,
+        user_id=data_json.get("user_id"),
+        team_id=data_json.get("team_id"),
+        agent_id=data_json.get("agent_id"),
+        project_id=data_json.get("project_id"),
+        organization_id=data_json.get("organization_id"),
+        max_parallel_requests=data_json.get("max_parallel_requests"),
+        metadata=data_json.get("metadata") or {},
+        tpm_limit=data_json.get("tpm_limit"),
+        rpm_limit=data_json.get("rpm_limit"),
+        budget_duration=key_budget_duration,
+        allowed_cache_controls=data_json.get("allowed_cache_controls") or [],
+        permissions=data_json.get("permissions") or {},
+        model_max_budget=data_json.get("model_max_budget") or {},
+        blocked=data_json.get("blocked"),
+        allowed_routes=data_json.get("allowed_routes") or [],
+        object_permission=data_json.get("object_permission"),
+        router_settings=data_json.get("router_settings"),
+        access_group_ids=data_json.get("access_group_ids") or [],
+        budget_limits=data_json.get("budget_limits"),
+        created_by=created_by,
+        updated_by=created_by,
+    )
+
+    response = GenerateKeyResponse(
+        key=key,
+        token_id=hash_token(key),
+        key_name=stored_key.get("key_name"),
+        key_alias=stored_key.get("key_alias"),
+        expires=(
+            _parse_datetime(stored_key.get("expires"))
+            if isinstance(stored_key.get("expires"), str)
+            else stored_key.get("expires")
+        ),
+        models=stored_key.get("models") or [],
+        aliases=stored_key.get("aliases") or {},
+        config=stored_key.get("config") or {},
+        max_budget=stored_key.get("max_budget"),
+        user_id=stored_key.get("user_id"),
+        team_id=stored_key.get("team_id"),
+        agent_id=stored_key.get("agent_id"),
+        project_id=stored_key.get("project_id"),
+        metadata=stored_key.get("metadata") or {},
+        tpm_limit=stored_key.get("tpm_limit"),
+        rpm_limit=stored_key.get("rpm_limit"),
+        budget_duration=stored_key.get("budget_duration"),
+        allowed_cache_controls=stored_key.get("allowed_cache_controls") or [],
+        permissions=stored_key.get("permissions") or {},
+        model_max_budget=stored_key.get("model_max_budget") or {},
+        blocked=stored_key.get("blocked"),
+        allowed_routes=stored_key.get("allowed_routes") or [],
+        created_by=stored_key.get("created_by"),
+        updated_by=stored_key.get("updated_by"),
+        created_at=(
+            _parse_datetime(stored_key.get("created_at"))
+            if isinstance(stored_key.get("created_at"), str)
+            else stored_key.get("created_at")
+        ),
+        updated_at=(
+            _parse_datetime(stored_key.get("updated_at"))
+            if isinstance(stored_key.get("updated_at"), str)
+            else stored_key.get("updated_at")
+        ),
+    )
+    response.token = response.token_id
+
+    asyncio.create_task(
+        KeyManagementEventHooks.async_key_generated_hook(
+            data=data,
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+    )
+    return response
+
+
 def _check_key_model_specific_limits(
     keys: List[LiteLLM_VerificationToken],
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
@@ -1398,10 +1687,22 @@ async def generate_key_fn(
     - expires: (datetime) Datetime object for when key expires.
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
-    from litellm.proxy.no_db_admin import get_no_db_admin_store, no_db_admin_error
+    from litellm.proxy.no_db_admin import get_no_db_admin_store
 
     if get_no_db_admin_store() is not None:
-        raise no_db_admin_error()
+        try:
+            return await _no_db_key_generation_helper(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.generate_key_fn(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
+            raise handle_exception_on_proxy(e)
 
     try:
         from litellm.proxy._types import CommonProxyErrors

@@ -8,6 +8,7 @@ import yaml
 import litellm
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
+from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
@@ -106,6 +107,22 @@ def _parse_datetime(value: Any) -> Optional[datetime]:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed
     return None
+
+
+def _to_yaml_safe_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if hasattr(value, "model_dump"):
+        return _to_yaml_safe_value(value.model_dump(exclude_none=True))
+    if isinstance(value, dict):
+        return {
+            key: _to_yaml_safe_value(nested_value)
+            for key, nested_value in value.items()
+            if nested_value is not None
+        }
+    if isinstance(value, list):
+        return [_to_yaml_safe_value(item) for item in value]
+    return value
 
 
 class NoDBAdminStore:
@@ -250,17 +267,31 @@ class NoDBAdminStore:
             config=key_data.get("config") or {},
             user_id=key_data.get("user_id"),
             team_id=key_data.get("team_id"),
+            agent_id=key_data.get("agent_id"),
+            project_id=key_data.get("project_id"),
+            max_parallel_requests=key_data.get("max_parallel_requests"),
             metadata={
                 **(key_data.get("metadata") or {}),
                 "secret_visible_to_admin": True,
             },
             tpm_limit=key_data.get("tpm_limit"),
             rpm_limit=key_data.get("rpm_limit"),
+            budget_duration=key_data.get("budget_duration"),
+            budget_reset_at=_parse_datetime(key_data.get("budget_reset_at")),
+            allowed_cache_controls=key_data.get("allowed_cache_controls") or [],
             allowed_routes=key_data.get("allowed_routes") or [],
             permissions=key_data.get("permissions") or {},
+            model_max_budget=key_data.get("model_max_budget") or {},
+            org_id=key_data.get("org_id") or key_data.get("organization_id"),
+            object_permission=key_data.get("object_permission"),
+            access_group_ids=key_data.get("access_group_ids"),
+            router_settings=key_data.get("router_settings"),
+            budget_limits=key_data.get("budget_limits"),
             blocked=key_data.get("blocked", False),
             created_at=_parse_datetime(key_data.get("created_at")),
             updated_at=_parse_datetime(key_data.get("updated_at")),
+            created_by=key_data.get("created_by"),
+            updated_by=key_data.get("updated_by"),
             user_role=key_data.get("user_role") or (user.user_role if user else None),
             user_email=user.user_email if user else None,
             team_alias=team.team_alias if team else None,
@@ -342,27 +373,86 @@ class NoDBAdminStore:
         self._write_secrets()
         return key
 
+    def has_key_alias(self, key_alias: str) -> bool:
+        self.reload()
+        return key_alias in self._secrets.get("keys", {})
+
     def upsert_api_key(
         self,
         *,
-        key_alias: str,
+        key_alias: Optional[str],
         key: str,
         user_id: Optional[str],
         team_id: Optional[str],
+        key_name: Optional[str] = None,
+        expires: Optional[datetime] = None,
         models: Optional[List[str]] = None,
-    ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        self._secrets.setdefault("keys", {})[key_alias] = {
+        aliases: Optional[dict] = None,
+        config: Optional[dict] = None,
+        max_budget: Optional[float] = None,
+        agent_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        organization_id: Optional[str] = None,
+        max_parallel_requests: Optional[int] = None,
+        metadata: Optional[dict] = None,
+        tpm_limit: Optional[int] = None,
+        rpm_limit: Optional[int] = None,
+        budget_duration: Optional[str] = None,
+        allowed_cache_controls: Optional[list] = None,
+        permissions: Optional[dict] = None,
+        model_max_budget: Optional[dict] = None,
+        blocked: Optional[bool] = None,
+        allowed_routes: Optional[list] = None,
+        object_permission: Optional[Any] = None,
+        router_settings: Optional[dict] = None,
+        access_group_ids: Optional[list] = None,
+        budget_limits: Optional[list] = None,
+        created_by: Optional[str] = None,
+        updated_by: Optional[str] = None,
+    ) -> dict:
+        self.reload()
+        now = datetime.now(timezone.utc)
+        token_hash = hash_token(key)
+        key_id = key_alias or token_hash
+        key_record = {
             "key": key,
-            "token": hash_token(key),
+            "token": token_hash,
+            "key_name": key_name or abbreviate_api_key(api_key=key),
             "key_alias": key_alias,
             "user_id": user_id,
             "team_id": team_id,
             "models": models or [],
+            "aliases": aliases or {},
+            "config": config or {},
+            "spend": 0,
+            "max_budget": max_budget,
+            "expires": expires,
+            "agent_id": agent_id,
+            "project_id": project_id,
+            "org_id": organization_id,
+            "max_parallel_requests": max_parallel_requests,
+            "metadata": metadata or {},
+            "tpm_limit": tpm_limit,
+            "rpm_limit": rpm_limit,
+            "budget_duration": budget_duration,
+            "allowed_cache_controls": allowed_cache_controls or [],
+            "permissions": permissions or {},
+            "model_max_budget": model_max_budget or {},
+            "blocked": blocked,
+            "allowed_routes": allowed_routes or [],
+            "object_permission": object_permission,
+            "router_settings": router_settings,
+            "access_group_ids": access_group_ids or [],
+            "budget_limits": budget_limits,
+            "created_by": created_by,
+            "updated_by": updated_by,
             "created_at": now,
             "updated_at": now,
         }
+        key_record = _to_yaml_safe_value(key_record)
+        self._secrets.setdefault("keys", {})[key_id] = key_record
         self._write_secrets()
+        return key_record
 
     def delete_api_key(self, key_or_alias: str) -> bool:
         keys = self._secrets.setdefault("keys", {})

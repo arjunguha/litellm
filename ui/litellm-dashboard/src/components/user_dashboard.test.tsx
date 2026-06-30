@@ -153,10 +153,10 @@ describe("UserDashboard config-backed mode", () => {
     expect(screen.getByText(/visible to LiteLLM admins/i)).toBeInTheDocument();
   });
 
-  it("should disable key creation and keep the existing keys table read-only", () => {
+  it("should allow key creation and keep the existing keys table read-only", () => {
     renderDashboard({ isNoDatabaseMode: true });
 
-    expect(screen.queryByTestId("create-key-mock")).not.toBeInTheDocument();
+    expect(screen.getByTestId("create-key-mock")).toBeInTheDocument();
     expect(screen.getByTestId("virtual-keys-table-mock")).toHaveAttribute(
       "data-read-only",
       "true",
